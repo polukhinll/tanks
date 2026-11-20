@@ -1,141 +1,286 @@
 package org.example;
 
+import org.example.bot.AggressiveBot;
+import org.example.bot.DefensiveBot;
 import org.example.model.*;
 
+import java.io.IOException;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
 import java.util.Scanner;
 
 public class Main {
 
+    private static final Path SAVE_FILE =
+            Path.of("battle.json");
+
     public static void main(String[] args) {
-
-        Board board = new Board(8, 8);
-
-        // Стены
-        board.set(new Position(3, 1), CellType.WALL);
-        board.set(new Position(3, 2), CellType.WALL);
-        board.set(new Position(3, 3), CellType.WALL);
-
-        // Укрытия
-        board.set(new Position(1, 4), CellType.COVER);
-        board.set(new Position(6, 4), CellType.COVER);
-
-        Tank light = new LightTank("L", new Position(0, 2));
-        Tank heavy = new HeavyTank("H", new Position(7, 2));
-
-        Game game = new Game(board, light, heavy, 42L);
 
         Scanner scanner = new Scanner(System.in);
 
-        System.out.println("=== ТАНКОВЫЙ БОЙ ===");
-        System.out.println("L - лёгкий танк, H - тяжёлый танк");
-        System.out.println("# - стена, + - укрытие, . - пусто");
-        System.out.println("Цель: уничтожить противника.");
+        while (true) {
 
-        while (!game.isFinished()) {
+            System.out.println("\n=== ТАНКИ ===");
+            System.out.println("1 - Играть вдвоём");
+            System.out.println("2 - Бой двух ботов");
+            System.out.println("3 - Турнир трёх стратегий");
+            System.out.println("4 - Загрузить бой из JSON");
+            System.out.println("0 - Выход");
 
-            printBoard(game);
+            System.out.print("Выбор: ");
 
-            Tank current = game.getCurrentTank();
+            if (!scanner.hasNextLine()) {
+                return;
+            }
 
-            System.out.println();
-            System.out.println("Ход танка " + current.getId()
-                    + " (" + current.getModel() + ")");
-            System.out.println("HP: " + current.getHealth()
-                    + " | Патроны: " + current.getAmmo()
-                    + " | Скорость: " + current.getSpeed());
+            String mode = scanner.nextLine().trim();
 
-            System.out.println(
-                    "Команда: dx dy цель зона");
-            System.out.println(
-                    "Пример выстрела: 0 0 H TURRET");
-            System.out.println(
-                    "Пример движения: 0 2 -");
-            System.out.println(
-                    "Зоны: HULL, TURRET, TRACKS");
-            System.out.println(
-                    "Для выхода введи exit");
+            try {
+
+                switch (mode) {
+
+                    case "1" -> humanGame(scanner);
+
+                    case "2" -> botGame();
+
+                    case "3" -> printTournament();
+
+                    case "4" -> replay();
+
+                    case "0" -> {
+                        return;
+                    }
+
+                    default -> System.out.println(
+                            "Нет такого пункта");
+                }
+
+            } catch (IOException | IllegalArgumentException e) {
+
+                System.out.println(
+                        "Ошибка: " + e.getMessage());
+            }
+        }
+    }
+
+    /** Игра двух людей через консоль. */
+    private static void humanGame(
+            Scanner scanner
+    ) throws IOException {
+
+        BattleSession session =
+                Tournament.newBattle(42L);
+
+        System.out.println(
+                "Команда: dx dy -");
+
+        System.out.println(
+                "Или: dx dy ID HULL/TURRET/TRACKS");
+
+        System.out.println(
+                "Пример: 0 2 - или 0 0 B TURRET");
+
+        System.out.println(
+                "save - сохранить бой");
+
+        System.out.println(
+                "exit - выйти в меню");
+
+        while (!session.getGame().isFinished()) {
+
+            printBoard(session.getGame());
+
+            Tank tank = session.getGame()
+                    .getCurrentTank();
+
+            System.out.printf(
+                    "Ход %s | HP %d | Патроны %d | Скорость %d%n",
+                    tank.getId(),
+                    tank.getHealth(),
+                    tank.getAmmo(),
+                    tank.getSpeed()
+            );
 
             System.out.print("> ");
 
             if (!scanner.hasNextLine()) {
-                break;
+                return;
             }
 
-            String line = scanner.nextLine().trim();
+            String input = scanner.nextLine().trim();
 
-            if (line.equalsIgnoreCase("exit")) {
-                break;
+            if (input.equalsIgnoreCase("exit")) {
+                return;
             }
 
-            String[] parts = line.split("\\s+");
+            if (input.equalsIgnoreCase("save")) {
+
+                session.save(SAVE_FILE);
+
+                System.out.println(
+                        "Сохранено: "
+                                + SAVE_FILE.toAbsolutePath());
+
+                continue;
+            }
 
             try {
-                if (parts.length != 3 && parts.length != 4) {
+
+                String[] words = input.split("\\s+");
+
+                if (words.length != 3
+                        && words.length != 4) {
+
                     throw new IllegalArgumentException(
-                            "Неверный формат команды");
+                            "Нужно 3 или 4 аргумента");
                 }
 
-                int dx = Integer.parseInt(parts[0]);
-                int dy = Integer.parseInt(parts[1]);
+                int dx = Integer.parseInt(words[0]);
+                int dy = Integer.parseInt(words[1]);
 
-                String targetId = null;
-                HitZone zone = null;
+                TurnAction action;
 
-                if (parts[2].equals("-")) {
-                    if (parts.length != 3) {
-                        throw new IllegalArgumentException(
-                                "Для пропуска выстрела укажи -");
-                    }
+                if (words.length == 3
+                        && words[2].equals("-")) {
+
+                    action = TurnAction.move(dx, dy);
+
+                } else if (words.length == 4) {
+
+                    action = new TurnAction(
+                            dx,
+                            dy,
+                            words[2],
+                            HitZone.valueOf(
+                                    words[3].toUpperCase(
+                                            Locale.ROOT
+                                    )
+                            )
+                    );
+
                 } else {
-                    if (parts.length != 4) {
-                        throw new IllegalArgumentException(
-                                "Нужно указать зону попадания");
-                    }
 
-                    targetId = parts[2];
-                    zone = HitZone.valueOf(
-                            parts[3].toUpperCase(Locale.ROOT));
+                    throw new IllegalArgumentException(
+                            "Укажи '-' или цель и зону");
                 }
 
-                List<GameEvent> events =
-                        game.takeTurn(dx, dy, targetId, zone);
-
-                for (GameEvent event : events) {
-                    System.out.println(event.message());
-                }
+                session.play(action).forEach(
+                        event -> System.out.println(
+                                event.message()
+                        )
+                );
 
             } catch (IllegalArgumentException
                      | IllegalStateException e) {
 
-                System.out.println("Ошибка: " + e.getMessage());
-            }
-        }
-
-        if (game.isFinished()) {
-            printBoard(game);
-
-            if (game.getWinnerId() != null) {
                 System.out.println(
-                        "Победил танк " + game.getWinnerId());
-            } else {
-                System.out.println("Бой закончился ничьей");
+                        "Недопустимый ход: " + e.getMessage());
             }
         }
 
-        System.out.println("Игра завершена.");
+        System.out.println(
+                "Победитель: "
+                        + session.getGame().getWinnerId());
+
+        session.save(SAVE_FILE);
+
+        System.out.println(
+                "Бой сохранён в battle.json");
     }
 
+    /** Автоматический бой двух ботов. */
+    private static void botGame() throws IOException {
+
+        BattleSession session = Tournament.battle(
+                new AggressiveBot(),
+                new DefensiveBot(),
+                42L
+        );
+
+        printBoard(session.getGame());
+
+        printHistory(session.getGame());
+
+        session.save(SAVE_FILE);
+
+        System.out.println(
+                "Бой сохранён в battle.json");
+    }
+
+    /** Вывод турнирной таблицы. */
+    private static void printTournament() {
+
+        List<Tournament.Result> rows =
+                Tournament.run(5, 42L);
+
+        System.out.printf(
+                "%-18s %6s %7s %6s %9s %10s%n",
+                "Тактика",
+                "Бои",
+                "Победы",
+                "Ничьи",
+                "Поражения",
+                "% побед"
+        );
+
+        for (Tournament.Result row : rows) {
+
+            System.out.printf(
+                    Locale.ROOT,
+                    "%-18s %6d %7d %6d %9d %9.1f%%%n",
+                    row.strategy(),
+                    row.games(),
+                    row.wins(),
+                    row.draws(),
+                    row.losses(),
+                    row.winRate()
+            );
+        }
+    }
+
+    /** Загружает и воспроизводит сохранённый бой. */
+    private static void replay() throws IOException {
+
+        BattleSession session =
+                BattleSession.load(SAVE_FILE);
+
+        System.out.println(
+                "Бой восстановлен успешно!");
+
+        printBoard(session.getGame());
+
+        printHistory(session.getGame());
+    }
+
+    /** Вывод журнала событий. */
+    private static void printHistory(Game game) {
+
+        game.getHistory().forEach(
+                event -> System.out.println(
+                        event.message()
+                )
+        );
+
+        String winner = game.getWinnerId();
+
+        System.out.println(
+                "Победитель: "
+                        + (winner == null
+                        ? "ничья / бой не закончен"
+                        : winner)
+        );
+    }
+
+    /** Отображает поле в консоли. */
     private static void printBoard(Game game) {
 
         Board board = game.getBoard();
 
-        System.out.println();
         System.out.print("   ");
 
         for (int x = 0; x < board.getWidth(); x++) {
-            System.out.printf("%2d", x);
+            System.out.print(x + " ");
         }
 
         System.out.println();
@@ -149,20 +294,23 @@ public class Main {
                 Position position = new Position(x, y);
 
                 char symbol = switch (board.get(position)) {
+
                     case EMPTY -> '.';
                     case WALL -> '#';
                     case COVER -> '+';
                 };
 
                 for (Tank tank : game.getTanks()) {
+
                     if (tank.isAlive()
-                            && tank.getPosition().equals(position)) {
-                        symbol = tank instanceof LightTank
-                                ? 'L' : 'H';
+                            && tank.getPosition()
+                            .equals(position)) {
+
+                        symbol = tank.getId().charAt(0);
                     }
                 }
 
-                System.out.printf("%2c", symbol);
+                System.out.print(symbol + " ");
             }
 
             System.out.println();
